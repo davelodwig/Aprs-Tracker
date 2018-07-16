@@ -1,133 +1,125 @@
 #include <LibAPRS.h>
 #include <SoftwareSerial.h>
 #include <TinyGPS.h>
-#include <U8glib.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
-// LibAPRS.h comes from http://unsigned.io and is used verbatim
-// SOftwareSerial.h allows you to talk to the GPS while still maintaining
-//    use of the other serial lines.
-// TinyGPS.h just runs the GPS.
-// U8glib.h runs the display.
+/*
+ * Maintained By David J. Lodwig <david.lodwig@davelodwig.co.uk>
+ * Forked from John Weers APRS Tracker https://github.com/jweers1/Aprs-Tracker
+ */
 
+ /*
+  * 
+  * The following variables control the operation of the beacon, you need
+  * to set your callsign, ssid, and the intervals in which you want it to
+  * beacon in seconds (speed increases the faster you are moving), and the time between
+  * screen refreshes.
+  * 
+  * You don't want to set the beacon interval any lower than 60 seconds, and no longer
+  * than about 10 minutes (600 seconds) for general mobile use.
+  * 
+  */
 
-/* This sample code demonstrates the normal use of a TinyGPS object.
-   It requires the use of SoftwareSerial, and assumes that you have a
-   4800-baud serial GPS device hooked up on pins 4(rx) and 3(tx).
-   Thanks Mikal for the great start...-JCW
-*/
+char  CallSign[8]           = "M0VDL" ;
+int   ssid                  = 1 ;
+char  *comment              = " Mobile Tracker";
+int   Updatedelay           = 180 ;
 
+char  ApplicationName[16]   = "Raynet Tracker" ;
+char  ApplicationVersion[8] = "1.2" ;
 
-TinyGPS gps;
-SoftwareSerial ss(11, 12);
-
-// set up the display
-U8GLIB_SH1106_128X64 u8g(U8G_I2C_OPT_NONE);
-
-// basic setup for the APRS radio section.
+/* 
+ * Do not edit below this comment, unless of course you are forking and doing some
+ * modifications to this code.
+ */
+ 
 #define ADC_REFERENCE REF_5V
 #define OPEN_SQUELCH false
 
-boolean gotPacket = false;
-AX25Msg incomingPacket;
-uint8_t *packetData;
+TinyGPS gps;
+SoftwareSerial ss(11, 12);
+LiquidCrystal_I2C lcd(0x3F,16,2);  // set the LCD address to 0x27 for a 16 chars and 2 line display
 
-// set up a couple variables for when we last transmitted.
-// aprs spec is around 10 minutes or so (faster if your speed is faster)
-// but probably not more than once per minute.
-long lastUpdate=0;
-int Updatedelay=600; //delay between packets in seconds.
+boolean   gotPacket = false;
+AX25Msg   incomingPacket;
+uint8_t   *packetData;
+long      lastUpdate=0;
 
+/* ************************************************************************* */
+/* * FUNCTION DECLARATIONS                                                 * */
+/* ************************************************************************* */
+
+static char *ftoa(char *a, double f, int precision) ;
 
 static void smartdelay(unsigned long ms);
+
 static void print_float(float val, float invalid, int len, int prec);
 static void print_int(unsigned long val, unsigned long invalid, int len);
 static void print_date(TinyGPS &gps);
 
-//static void print_str(const char *str, int len);
+static void lcd_display_startup () ;
+static void lcd_time (TinyGPS &gps) ;
+static void lcd_display_lat ( float flat ) ;
+static void lcd_display ( int quarter, char text[8] ) ;
 
+static void serial_print_header () ;
+static void serial_print_gpsrow () ;
 
+/* ************************************************************************* */
+/* * STARTUP                                                               * */
+/* ************************************************************************* */
 
-void setup()
-{
-  // initialize serial output.
-  // 9600 is mandatory.   the aprs stuff can't hack a faster rate
+void setup() {
+ 
+  // initialize serial output, 9600 is mandatory. the aprs stuff can't hack a faster rate
   // even though it doesn't directly use this.
   Serial.begin(9600);
-  Serial.println(F("Sats HDOP Latitude  Longitude  Fix  Date       Time     Date Alt    "));
-  Serial.println(F("          (deg)     (deg)      Age                      Age  (m)    "));
-  Serial.println(F("--------------------------------------------------------------------"));
 
-  // LED display to tell me when we are transmitting.
-  pinMode(2,OUTPUT);
-  
-  // initialize serial to talk with the GPS.  
-  // 9600 is mandatory.
+  // initialize serial to talk with the GPS. 9600 is mandatory.
   ss.begin(9600);
   
+  // LED display to tell me when we are transmitting.
+  pinMode ( 2, OUTPUT ) ;
   // pin 8 is a pushbutton to allow the user to send a packet whenever they want.
   pinMode(8,INPUT);
+
+  // Intialise the lcd display driver.
+  lcd.begin();
   
-  u8g.firstPage();  
-  do {
-    draw(200.00,1.01);
-  } while( u8g.nextPage() );
-  
- 
   // Initialise APRS library - This starts the mode
   APRS_init(ADC_REFERENCE, OPEN_SQUELCH);
   
   // You must at a minimum configure your callsign and SSID
-// you may also not use this software without a valid license
-  APRS_setCallsign("CALLSIGN", 1);
+  // you may also not use this software without a valid license
+  APRS_setCallsign ( CallSign, ssid ) ;
  
   APRS_printSettings();
-  Serial.print(F("Free RAM:     ")); Serial.println(freeMemory());
 
-}
+  // Print the GPS header to the serial port
+  serial_print_header() ;
 
-
-// converts float to char*
-char *ftoa(char *a, double f, int precision)
-{
- long p[] = {0,10,100,1000,10000,100000,1000000,10000000,100000000};
- 
- char *ret = a;
- long heiltal = (long)f;
- itoa(heiltal, a, 10);
- while (*a != '\0') a++;
- *a++ = '.';
- long desimal = abs((long)((f - heiltal) * p[precision]));
- itoa(desimal, a, 10);
- return ret;
-}
-
-
-// redraw the screen.
-void draw(float flat,float flon) {
-  // graphic commands to redraw the complete screen should be placed here  
-  //u8g.setFont(u8g_font_unifont);
-
-  u8g.setFont(u8g_font_fub14);
-  char z[12];
-  ftoa((char*)&z,flat,4);
-  u8g.drawStr(0,28,z);
-  ftoa((char*)&z,flon,4);
-  u8g.drawStr(0,56,z);
+  lcd_display_startup () ;
   
 }
 
+/* ************************************************************************* */
+/* * THE LOOP                                                              * */
+/* ************************************************************************* */
 
-//main loop.   
-// here we read GPS and occasionally send a packet.
-
-void loop()
-{
+void loop() {
+  
   float flat, flon;
+  char* tlat, tlon ;
   unsigned long age, date, time, chars = 0;
   unsigned short sentences = 0, failed = 0;
   byte buttonState;
   unsigned long gps_speed;
   int FlexibleDelay = Updatedelay;
+  char* Position ;
+  char y[13];
+  char z[13];
+  char countdown[3] ;
 
   //print some various status  
   print_int(gps.satellites(), TinyGPS::GPS_INVALID_SATELLITES, 5);
@@ -142,82 +134,76 @@ void loop()
   // 10 mph = no alteration
   // 20 mph = /2
   // 30 mph = /3
-  // 40 mph = /4 etc.
-  if ((gps_speed > 100) && (gps_speed <20000)){
+  // 40 mph = /4
+  if ((gps_speed > 100) && (gps_speed <20000)) {
+     
      FlexibleDelay = Updatedelay /(gps_speed / 1000) ;  
+     
   } else {
+     
       FlexibleDelay = Updatedelay; 
+      
   }
-    // more debug print.
+  
+  // more debug print.
   print_float(flat, TinyGPS::GPS_INVALID_F_ANGLE, 10, 6);
   print_float(flon, TinyGPS::GPS_INVALID_F_ANGLE, 11, 6);
   print_int(age, TinyGPS::GPS_INVALID_AGE, 5);
-  
+
   print_date(gps);
   
   Serial.print(gps_speed);
   Serial.print(" ");
   Serial.print(FlexibleDelay);
+  
+  if ((flat==TinyGPS::GPS_INVALID_F_ANGLE) || (flon==TinyGPS::GPS_INVALID_F_ANGLE)) {
+  
+    // Serial.println("data is bad...");
+    // redraw the screen
+    lcd.setCursor ( 0, 1 ) ;
+    lcd.print ( "No Signal               " ) ;
+  
+  } else {
+    
+    // check for any new packets.
+    smartdelay(250);
+    processPacket();
+    smartdelay(250);
 
-if ((flat==TinyGPS::GPS_INVALID_F_ANGLE) || (flon==TinyGPS::GPS_INVALID_F_ANGLE)){
- // Serial.println("data is bad...");
-  // redraw the screen
-  u8g.firstPage();  
-  do {
-    draw(0,0);
-  } while( u8g.nextPage() );
+    // check to see if the user pushed the button
+    buttonState=digitalRead(8);
   
-} else {
+    if ((buttonState==1) || ((millis()-lastUpdate)/1000 > FlexibleDelay)||(Updatedelay==0)) {
+    
+      // turn on the LED
+      digitalWrite(2,HIGH);
+    
+      //no magic in the delay.  just gives time for the LED to light up and shutdown with the transmit cycle in the middle.
+      smartdelay(200);
+      locationUpdate(flat,flon);
+      smartdelay(200);
+  
+      // redraw the screen.
+      // turn off the LED
+  
+      digitalWrite(2,LOW);
+      lastUpdate=millis();
+    } else {
 
-  // check for any new packets.
-  smartdelay(250);
-  processPacket();
-  smartdelay(250);
+      int countdownTemp = FlexibleDelay - ((millis()-lastUpdate)/1000) ; 
+      sprintf (countdown, "%03i", countdownTemp);
 
-  //redraw the screen.
-  u8g.firstPage();  
-  do {
-    draw(flat,flon);
-  } while( u8g.nextPage() );
+      lcd_display ( 3, countdown ) ;
+       
+    }
+    
+    lcd_display_lat ( flat ) ;
+    lcd_display_lon ( flon ) ;
   
-  // check to see if the user pushed the button
-  buttonState=digitalRead(8);
-  
-  if ((buttonState==1) || ((millis()-lastUpdate)/1000 > FlexibleDelay)||(Updatedelay==0)){
-//  Serial.println();
-//  Serial.println(millis());
-//  Serial.println(lastUpdate);
-//  Serial.println(Updatedelay);
-
-  // turn on the LED
-  digitalWrite(2,HIGH);
-  // redraw the screen
-  u8g.firstPage();  
-  do {
-    draw(-1,-1);
-  } while( u8g.nextPage() );
-  
-  //no magic in the delay.  just gives time for the LED to light up and shutdown with the transmit cycle in the middle.
-  
-  smartdelay(200);
-    locationUpdate(flat,flon);
-  smartdelay(200);
-  
-  // redraw the screen.
-  u8g.firstPage();  
-  do {
-    draw(flat,flon);
-  } while( u8g.nextPage() );
-
-  // turn off the LED
-  digitalWrite(2,LOW);
-  lastUpdate=millis();
+    //digitalWrite(2,LOW);  
   }
-  
-  //digitalWrite(2,LOW);  
-}
 
-Serial.println();
+  Serial.println();
   
   smartdelay(1000);
   // check for packets.
@@ -225,58 +211,90 @@ Serial.println();
   
 }
 
+/*
+ * Converts float to char for display
+ */
+char *ftoa(char *a, double f, int precision) {
+ 
+  long p[] = {0,10,100,1000,10000,100000,1000000,10000000,100000000};
+ 
+  char *ret = a;
+  long heiltal = (long)f;
+  itoa(heiltal, a, 10);
+  while (*a != '\0') a++;
+  *a++ = '.';
+  long desimal = abs((long)((f - heiltal) * p[precision]));
+  itoa(desimal, a, 10);
+  
+  return ret;
+}
+
+
 
 void locationUpdate(float flat,float flon) {
+  
   // Let's first set our latitude and longtitude.
   // These should be in NMEA format!
-
-
-// flat, negative == Southern hemisphere
-// flon, negative == western hemisphere
-//  for instance...  43.646808, -116.286437  
-//nmea then is:
-//  43 .. (.646808*60),N
-// 116 .. (.286437*60),W  (w since it was negative)
-// APRS chokes when you send a ,N though... 
-// it also chokes when you send more than 2 decimal places.
+  // flat, negative == Southern hemisphere
+  // flon, negative == western hemisphere
+  //  for instance...  43.646808, -116.286437  
+  //nmea then is:
+  //  43 .. (.646808*60),N
+  // 116 .. (.286437*60),W  (w since it was negative)
+  // APRS chokes when you send a ,N though... 
+  // it also chokes when you send more than 2 decimal places.
 
   int temp;
   char y[13];
   char z[13];
 
-// CONVERT to NMEA.  
-  if (flat<0){
-     temp=-(int)flat;
-     flat=temp*100 - (flat+temp)*60;
-     ftoa((char*)&y,flat,3);   
-     //z[10]=',';
-     if (flat > 10000) {
-       y[8]='S';
-       y[9]=0;
+  // CONVERT to NMEA.  
+  if (flat<0) {
+    
+    temp=-(int)flat;
+    flat=temp*100 - (flat+temp)*60;
+    ftoa((char*)&y,flat,3);   
+    //z[10]=',';
+    
+    if (flat > 10000) {
+      y[8]='S';
+      y[9]=0;
+     
      } else {
-       y[7]='S';
-       y[8]=0;
+      
+      y[7]='S';
+      y[8]=0;
+      
      }
-  } else {
-     temp=(int)flat;
-     flat=temp*100 + (flat-temp)*60;
-     ftoa((char*)&y,flat,3);      
-     //z[10]=',';
-     if (flat > 10000) {
-       y[8]='N';
-       y[9]=0;
-     } else {
-       y[7]='N';
-       y[8]=0;
-     }  
-   }
+    
+    } else {
+      
+      temp=(int)flat;
+      flat=temp*100 + (flat-temp)*60;
+      ftoa((char*)&y,flat,3);      
+      //z[10]=',';
+      
+      if (flat > 10000) {
+        
+        y[8]='N';
+        y[9]=0;
+        
+      } else {
+      
+        y[7]='N';
+        y[8]=0;
+     
+      }  
+    }
      
    APRS_setLat(y);
    
-  Serial.println();
-  Serial.println(F("Location Update:"));
-  Serial.print(F("Lat: "));
-  Serial.println(y);
+   Serial.println();
+   Serial.println(F("Location Update:"));
+   Serial.print(F("Lat: "));
+   Serial.println(y);
+
+   
   
   if (flon<0){
     temp=-(int)flon;
@@ -322,10 +340,9 @@ void locationUpdate(float flat,float flon) {
   //APRS_setHeight(4);
   //APRS_setGain(7);
   //APRS_setDirectivity(0);
-  
-  // We'll define a comment string
-  char *comment = " JWAprsTrkr";
     
+  lcd_display ( 3, "Beacon" ) ;
+  
   // And send the update
   APRS_sendLoc(comment, strlen(comment));
   
@@ -413,6 +430,8 @@ static void print_int(unsigned long val, unsigned long invalid, int len)
   smartdelay(0);
 }
 
+
+
 static void print_date(TinyGPS &gps)
 {
   int year;
@@ -466,5 +485,211 @@ void aprs_msg_callback(struct AX25Msg *msg) {
       gotPacket = false;
     }
   }
+}
+
+/* ************************************************************************* */
+/* * LCD DISPLAY FUNCTIONS                                                 * */
+/* ************************************************************************* */
+
+/*
+ * Displays the tracker startup screen.
+ */
+static void lcd_display_startup () {
+
+  lcd.clear() ;
+  lcd.setCursor ( 0, 0 ) ;
+  lcd.print ( ApplicationName ) ;
+  lcd.setCursor ( 0, 1 ) ;
+  lcd.print ( "Version: " ) ;
+  lcd.print ( ApplicationVersion ) ;
+
+  delay ( 3000 ) ;
+  lcd.noBacklight() ;
+}
+
+static void lcd_display_lat ( float flat ) {
+
+  int temp ;
+  char y[13];
+
+  // CONVERT to NMEA.  
+  if ( flat<0 ) {
+    
+    temp =- (int) flat ;
+    flat = temp*100 - (flat+temp)*60 ;
+    ftoa((char*)&y,flat,3);   
+    
+    if (flat > 10000) {
+      
+      y[8]='S';
+      y[9]=0;
+    
+    } else {
+      
+      y[7]='S';
+      y[8]=0;
+      
+    }
+    
+  } else {
+
+    temp=(int)flat;
+    flat=temp*100 + (flat-temp)*60;
+    ftoa((char*)&y,flat,3);      
+    
+    if (flat > 10000) {
+
+      y[8]='N';
+      y[9]=0;
+        
+    } else {
+      
+      y[7]='N';
+      y[8]=0;
+     
+    }  
+  }
+
+  lcd_display ( 2, y ) ;
+}
+
+static void lcd_display_lon ( float flon ) {
+
+  int temp ;
+  char z[13];
+  
+  if ( flon<0 ) {
+    
+    temp=-(int)flon;
+    flon=temp*100 - (flon+temp)*60;
+    ftoa((char*)&z,flon,3);
+    
+    if (flon > 10000) {
+      
+      z[8]='W';
+      z[9]=0;
+      
+     } else {
+      
+      z[7]='W';
+      z[8]=0; 
+      
+     }
+     
+  } else {
+  
+    temp=(int)flon;
+    flon=temp*100 + (flon-temp)*60;
+    ftoa((char*)&z,flon,3);   
+    
+    if (flon > 10000) {
+      
+      z[8]='E';
+      z[9]=0;
+      
+    } else {
+    
+      z[7]='E';
+      z[8]=0; 
+     
+    }
+  }
+
+  lcd_display ( 4, z ) ;
+
+}
+
+
+/*
+ * Print the GPS time to the screen
+ */
+static void lcd_time (TinyGPS &gps ) {
+  
+  int year;
+  byte month, day, hour, minute, second, hundredths;
+  unsigned long age;
+
+  lcd.setCursor ( 9, 0 ) ;
+  
+  gps.crack_datetime(&year, &month, &day, &hour, &minute, &second, &hundredths, &age);
+  if (age == TinyGPS::GPS_INVALID_AGE) {
+    lcd.print ( "        " ) ;
+  }
+  else
+  {
+    char sz[6];
+    sprintf(sz, "%02d:%02d",
+        hour, minute );
+    lcd.print ( sz ) ;
+  }
+  print_int(age, TinyGPS::GPS_INVALID_AGE, 5);
+  smartdelay(0);
+  
+}
+
+/*
+ * Print to the lcd display, quarter denotes the bit of the
+ * screen you want your text to appear ( 1,2,3,4 ) and the
+ * text variable holds the char data for it, the char data
+ * should be no longer than 8 chars.
+ */
+static void lcd_display ( int quarter, char text[8] ) {
+
+  int   spacesrequired ;
+  
+  // First work out how many chars are in the 
+  // array so we know how many whitespace to add.
+  spacesrequired = 8 - strlen(text) ;
+
+  if ( quarter == 1 || quarter == 3 ) {
+    
+    if ( quarter == 1 ) {
+      lcd.setCursor ( 0, 0 ) ;
+    } else {
+      lcd.setCursor ( 0, 1 ) ;
+    }
+
+    lcd.print ( text ) ;
+
+    for (int i=0; i <= spacesrequired; i++) {
+      lcd.print ( " " ) ;
+    }
+  }
+
+  if ( quarter == 2 || quarter == 4 ) {
+
+    if ( quarter == 2 ) {
+    
+      lcd.setCursor ( 8, 0 ) ;
+  
+    } else {
+
+      lcd.setCursor ( 8, 1 ) ;
+      
+    }
+
+    lcd.print ( text ) ;
+
+    for (int i=0; i < spacesrequired; i++) {
+      lcd.print ( " " ) ;
+    }
+    
+  }
+}
+
+/*
+ * prints the gps data row header to the serial port.
+ * @return  void
+ */
+void serial_print_header () {
+
+  Serial.println(F("Sats HDOP Latitude  Longitude  Fix  Date       Time     Date Alt    "));
+  Serial.println(F("          (deg)     (deg)      Age                      Age  (m)    "));
+  Serial.println(F("--------------------------------------------------------------------"));
+
+}
+
+void serial_print_gpsrow () {
+  
 }
 
