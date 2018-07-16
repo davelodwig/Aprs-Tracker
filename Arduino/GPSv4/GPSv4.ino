@@ -21,10 +21,10 @@
   * 
   */
 
-char  CallSign[8]           = "M0VDL" ;
-int   ssid                  = 1 ;
-char  *comment              = " Mobile Tracker";
-int   Updatedelay           = 180 ;
+char  ConfigCallsign[8]     = "M0VDL" ;
+int   ConfigSsid            = 1 ;
+char  ConfigComment[255]    = " Mobile Tracker";
+int   ConfigDelay           = 180 ;
 
 char  ApplicationName[16]   = "Raynet Tracker" ;
 char  ApplicationVersion[8] = "1.2" ;
@@ -41,10 +41,11 @@ TinyGPS gps;
 SoftwareSerial ss(11, 12);
 LiquidCrystal_I2C lcd(0x3F,16,2);  // set the LCD address to 0x27 for a 16 chars and 2 line display
 
-boolean   gotPacket = false;
-AX25Msg   incomingPacket;
-uint8_t   *packetData;
-long      lastUpdate=0;
+boolean   gotPacket     = false ;
+AX25Msg   incomingPacket ;
+uint8_t   *packetData ;
+long      lastUpdate    = 0 ;
+int       currentscreen = 0 ;
 
 /* ************************************************************************* */
 /* * FUNCTION DECLARATIONS                                                 * */
@@ -59,9 +60,8 @@ static void print_int(unsigned long val, unsigned long invalid, int len);
 static void print_date(TinyGPS &gps);
 
 static void lcd_display_startup () ;
-static void lcd_time (TinyGPS &gps) ;
-static void lcd_display_lat ( float flat ) ;
-static void lcd_display ( int quarter, char text[8] ) ;
+static void lcd_display_nosignal () ;
+static void lcd_display_home ( float flat, float flon, char timeclock ) ;
 
 static void serial_print_header () ;
 static void serial_print_gpsrow () ;
@@ -92,7 +92,7 @@ void setup() {
   
   // You must at a minimum configure your callsign and SSID
   // you may also not use this software without a valid license
-  APRS_setCallsign ( CallSign, ssid ) ;
+  APRS_setCallsign ( ConfigCallsign, ConfigSsid ) ;
  
   APRS_printSettings();
 
@@ -115,7 +115,7 @@ void loop() {
   unsigned short sentences = 0, failed = 0;
   byte buttonState;
   unsigned long gps_speed;
-  int FlexibleDelay = Updatedelay;
+  int FlexibleDelay = ConfigDelay;
   char* Position ;
   char y[13];
   char z[13];
@@ -137,11 +137,11 @@ void loop() {
   // 40 mph = /4
   if ((gps_speed > 100) && (gps_speed <20000)) {
      
-     FlexibleDelay = Updatedelay /(gps_speed / 1000) ;  
+     FlexibleDelay = ConfigDelay /(gps_speed / 1000) ;  
      
   } else {
      
-      FlexibleDelay = Updatedelay; 
+      FlexibleDelay = ConfigDelay; 
       
   }
   
@@ -158,10 +158,8 @@ void loop() {
   
   if ((flat==TinyGPS::GPS_INVALID_F_ANGLE) || (flon==TinyGPS::GPS_INVALID_F_ANGLE)) {
   
-    // Serial.println("data is bad...");
-    // redraw the screen
-    lcd.setCursor ( 0, 1 ) ;
-    lcd.print ( "No Signal               " ) ;
+    // No satellites found, display the error.
+    lcd_display_nosignal () ;
   
   } else {
     
@@ -173,7 +171,7 @@ void loop() {
     // check to see if the user pushed the button
     buttonState=digitalRead(8);
   
-    if ((buttonState==1) || ((millis()-lastUpdate)/1000 > FlexibleDelay)||(Updatedelay==0)) {
+    if ((buttonState==1) || ((millis()-lastUpdate)/1000 > FlexibleDelay)||(ConfigDelay==0)) {
     
       // turn on the LED
       digitalWrite(2,HIGH);
@@ -188,21 +186,11 @@ void loop() {
   
       digitalWrite(2,LOW);
       lastUpdate=millis();
-    } else {
-
-      int countdownTemp = FlexibleDelay - ((millis()-lastUpdate)/1000) ; 
-      sprintf (countdown, "%03i", countdownTemp);
-
-      lcd_display ( 3, countdown ) ;
-       
     }
-    
-    lcd_display_lat ( flat ) ;
-    lcd_display_lon ( flon ) ;
-  
-    //digitalWrite(2,LOW);  
-  }
 
+    lcd_display_home ( flat, flon, gps ) ;
+  }
+  
   Serial.println();
   
   smartdelay(1000);
@@ -328,23 +316,9 @@ void locationUpdate(float flat,float flon) {
 
   Serial.print(F("Lon:"));
   Serial.println(z);
-    
-  // We can optionally set power/height/gain/directivity
-  // information. These functions accept ranges
-  // from 0 to 10, directivity 0 to 9.
-  // See this site for a calculator:
-  // http://www.aprsfl.net/phgr.php
-  // LibAPRS will only add PHG info if all four variables
-  // are defined!
-  //APRS_setPower(2);
-  //APRS_setHeight(4);
-  //APRS_setGain(7);
-  //APRS_setDirectivity(0);
-    
-  lcd_display ( 3, "Beacon" ) ;
   
   // And send the update
-  APRS_sendLoc(comment, strlen(comment));
+  APRS_sendLoc(ConfigComment, strlen(ConfigComment));
   
 }
 
@@ -459,7 +433,6 @@ static void print_str(const char *str, int len)
   smartdelay(0);
 }
 
-
 void aprs_msg_callback(struct AX25Msg *msg) {
   // If we already have a packet waiting to be
   // processed, we must drop the new one.
@@ -496,23 +469,45 @@ void aprs_msg_callback(struct AX25Msg *msg) {
  */
 static void lcd_display_startup () {
 
-  lcd.clear() ;
-  lcd.setCursor ( 0, 0 ) ;
-  lcd.print ( ApplicationName ) ;
-  lcd.setCursor ( 0, 1 ) ;
-  lcd.print ( "Version: " ) ;
-  lcd.print ( ApplicationVersion ) ;
+  if ( currentscreen != 0 ) {
 
-  delay ( 3000 ) ;
-  lcd.noBacklight() ;
+    currentscreen = 0 ;
+  
+    lcd.clear() ;
+    lcd.setCursor ( 0, 0 ) ;
+    lcd.print ( ApplicationName ) ;
+    lcd.setCursor ( 0, 1 ) ;
+    lcd.print ( "Version: " ) ;
+    lcd.print ( ApplicationVersion ) ;
+  
+    delay ( 3000 ) ;
+  }
 }
 
-static void lcd_display_lat ( float flat ) {
+static void lcd_display_nosignal () {
+
+  if ( currentscreen != 1 ) {
+
+    currentscreen = 1 ;
+    
+    lcd.clear() ;
+    lcd.setCursor ( 0, 0 ) ;
+    lcd.print ( ConfigCallsign ) ;
+    lcd.setCursor ( 0, 1 ) ;
+    lcd.print ( "No Signal Found" ) ;
+  }
+}
+
+static void lcd_display_home ( float flat, float flon, TinyGPS &gps ) {
 
   int temp ;
   char y[13];
+  char z[13];
 
-  // CONVERT to NMEA.  
+  int year;
+  byte month, day, hour, minute, second, hundredths;
+  unsigned long age;
+  
   if ( flat<0 ) {
     
     temp =- (int) flat ;
@@ -550,14 +545,6 @@ static void lcd_display_lat ( float flat ) {
     }  
   }
 
-  lcd_display ( 2, y ) ;
-}
-
-static void lcd_display_lon ( float flon ) {
-
-  int temp ;
-  char z[13];
-  
   if ( flon<0 ) {
     
     temp=-(int)flon;
@@ -595,85 +582,28 @@ static void lcd_display_lon ( float flon ) {
     }
   }
 
-  lcd_display ( 4, z ) ;
+  if ( currentscreen != 3 ) {
 
-}
+    currentscreen = 3 ;
+    lcd.clear() ;
+    lcd.setCursor ( 0, 0 ) ;
+    lcd.print ( ConfigCallsign ) ;
 
+  }
+    
+  lcd.setCursor ( 8, 0 ) ;
+  lcd.print ( y ) ;
+  lcd.setCursor ( 8, 1 ) ;
+  lcd.print ( z ) ;
 
-/*
- * Print the GPS time to the screen
- */
-static void lcd_time (TinyGPS &gps ) {
-  
-  int year;
-  byte month, day, hour, minute, second, hundredths;
-  unsigned long age;
-
-  lcd.setCursor ( 9, 0 ) ;
-  
+  lcd.setCursor ( 0, 1 ) ;
   gps.crack_datetime(&year, &month, &day, &hour, &minute, &second, &hundredths, &age);
   if (age == TinyGPS::GPS_INVALID_AGE) {
-    lcd.print ( "        " ) ;
-  }
-  else
-  {
+    lcd.print ( "       " ) ;
+  } else {
     char sz[6];
-    sprintf(sz, "%02d:%02d",
-        hour, minute );
+    sprintf ( sz, "%02d:%02d", hour, minute ) ;
     lcd.print ( sz ) ;
-  }
-  print_int(age, TinyGPS::GPS_INVALID_AGE, 5);
-  smartdelay(0);
-  
-}
-
-/*
- * Print to the lcd display, quarter denotes the bit of the
- * screen you want your text to appear ( 1,2,3,4 ) and the
- * text variable holds the char data for it, the char data
- * should be no longer than 8 chars.
- */
-static void lcd_display ( int quarter, char text[8] ) {
-
-  int   spacesrequired ;
-  
-  // First work out how many chars are in the 
-  // array so we know how many whitespace to add.
-  spacesrequired = 8 - strlen(text) ;
-
-  if ( quarter == 1 || quarter == 3 ) {
-    
-    if ( quarter == 1 ) {
-      lcd.setCursor ( 0, 0 ) ;
-    } else {
-      lcd.setCursor ( 0, 1 ) ;
-    }
-
-    lcd.print ( text ) ;
-
-    for (int i=0; i <= spacesrequired; i++) {
-      lcd.print ( " " ) ;
-    }
-  }
-
-  if ( quarter == 2 || quarter == 4 ) {
-
-    if ( quarter == 2 ) {
-    
-      lcd.setCursor ( 8, 0 ) ;
-  
-    } else {
-
-      lcd.setCursor ( 8, 1 ) ;
-      
-    }
-
-    lcd.print ( text ) ;
-
-    for (int i=0; i < spacesrequired; i++) {
-      lcd.print ( " " ) ;
-    }
-    
   }
 }
 
