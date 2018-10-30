@@ -333,7 +333,6 @@ void function choose_config_callsign() {
       
     }
 
-
     if ( cnState == 1 ) {
     
       break ;
@@ -341,7 +340,6 @@ void function choose_config_callsign() {
     } else if ( okState == 1 ) {
 
       // update the eeprom.
-             
     
     } else if ( upState == 1 ) {
 
@@ -364,7 +362,6 @@ void function choose_config_callsign() {
   }
   
 }
-
 
 /*
  * Converts float to char for display
